@@ -190,6 +190,7 @@ int verbose_set_bandwidth(SoapySDRDevice *dev, uint32_t bandwidth, size_t chan)
 	r = (int)SoapySDRDevice_setBandwidth(dev, SOAPY_SDR_RX, chan, (double)bandwidth);
 	uint32_t applied_bw = 0;
 	if (r != 0) {
+	        SoapySDRDevice_writeSetting(dev, "SAVE_CONFIG", "lms_config.txt");
 		fprintf(stderr, "ERROR: Failed to set bandwidth on chan %zu.\n", chan);
                 exit(13);
 	} else if (bandwidth > 0) {

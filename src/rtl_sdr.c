@@ -384,10 +384,15 @@ int main(int argc, char **argv)
 		verbose_ppm_set(dev, ppm_error, 0);
 	} else {
 		for(ch = 0; ch < nchan; ch++) {
+		    char tname[256];
+		    snprintf(tname, 256, "saved_config_ch%01d.dat", ch);
 			verbose_set_sample_rate(dev, samp_rate[ch], channels[ch]);
 			verbose_set_frequency(dev, frequency[ch], channels[ch]);
 			verbose_set_antenna(dev, ant[ch], channels[ch]);
 			verbose_set_bandwidth(dev, bw[ch], channels[ch]);
+			printf("Saving config into %s\n", tname);
+			SoapySDRDevice_writeSetting(dev, "SAVE_CONFIG", tname);
+			printf("Saved config into %s\n", tname);
 			if (NULL == gain_str[ch]) {
 				/* Enable automatic gain */
 				verbose_auto_gain(dev, channels[ch]);

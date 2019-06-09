@@ -432,6 +432,14 @@ static void show_device_info(SoapySDRDevice *dev)
 		fprintf(stderr, "%.0f ", bandwidths[i]);
 	}
 	fprintf(stderr, "\n");
+
+	args = SoapySDRDevice_getChannelInfo(dev, direction, channel);
+	fprintf(stderr, "Channel info:    ");
+	for (i = 0; i < args.size; ++i) {
+		fprintf(stderr, "%s=%s ", args.keys[i], args.vals[i]);
+	}
+	fprintf(stderr, "\n");
+
 }
 
 int suppress_stdout_start(void) {

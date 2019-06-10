@@ -55,18 +55,17 @@ static SoapySDRStream *stream = NULL;
 
 typedef struct {
 	char *filename[MAX_NUM_CHANNELS];
-    	char *dev_query = NULL;
+    	char *dev_query;
 	uint32_t frequency[MAX_NUM_CHANNELS];
 	uint32_t samp_rate[MAX_NUM_CHANNELS];
-	uint32_t out_block_size = DEFAULT_BUF_LENGTH;
-	char *output_format = SOAPY_SDR_CU8;
+	uint32_t out_block_size;
+	char *output_format;
 	char * ant[MAX_NUM_CHANNELS];
-	size_t * channels;
-	size_t nchan = 0;
+	size_t nchan;
 	char *gain_str[MAX_NUM_CHANNELS];
-	int ppm_error = 0;
-	int sync_mode = 0;
-	int direct_sampling = 0;
+	int ppm_error;
+	int sync_mode;
+	int direct_sampling;
 	FILE *file_ch[MAX_NUM_CHANNELS];
 	int16_t *buffer_ch[MAX_NUM_CHANNELS];
 	int16_t *buffer_ch_rec[MAX_NUM_CHANNELS];
@@ -124,7 +123,9 @@ void write_thread(void * params)
 {
     uint8_t *buf8 = NULL;
     float *fbuf = NULL; // assumed 32-bit
+    int ch;
 
+#ifdef POOO    
     for(ch = 0; ch < nchan; ch++) {
 	if (output_format == SOAPY_SDR_CS16) {
 	    // The "native" format we read in, write out no conversion needed
@@ -136,6 +137,8 @@ void write_thread(void * params)
 	    
 	}
     }
+#endif
+    
 #ifdef POO
     if (output_format == SOAPY_SDR_CS8 || output_format == SOAPY_SDR_CU8) {
 	buf8 = malloc(out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS8));
@@ -162,7 +165,6 @@ do_options(int argc, char **argv, ProgOptions * opts)
     int o, count;
     int option_idx;
     int ch;
-    int count;
     
     lg_opts = malloc(sizeof(struct option) * (MAX_NUM_CHANNELS * (sizeof(base_opt) / sizeof(char *) + 2)));
     if (lg_opts == NULL) {
@@ -214,7 +216,14 @@ do_options(int argc, char **argv, ProgOptions * opts)
 	opts->samp_rate[ch] = DEFAULT_SAMPLE_RATE;
 	opts->ant[ch] = NULL;
     }
-    
+
+    opts->nchan = 1;
+    opts->ppm_error = 0;
+    opts->sync_mode = 0;
+    opts->direct_sampling = 0;
+    opts->output_format = SOAPY_SDR_CU8;
+    opts->out_block_size = DEFAULT_BUF_LENGTH;
+	
     while ((opt = getopt_long(argc, argv, "d:f:g:s:b:n:p:D:SF:A:N:B:", lg_opts, &option_idx)) != -1) {
 	switch (opt) {
 	case 0:
@@ -268,7 +277,7 @@ do_options(int argc, char **argv, ProgOptions * opts)
 	    break;
 	case 'n':
 	    // half of I/Q pair count (double for one each of I and Q)
-	    opts->samples_to_read = (uint64_t)atofs(optarg) * 2;
+	    samples_to_read = (uint64_t)atofs(optarg) * 2;
 	    break;
 	case 'S':
 	    opts->sync_mode = 1;
@@ -357,13 +366,14 @@ int main(int argc, char **argv)
 	int16_t * buffer_ch[MAX_NUM_CHANNELS];
 	int written_to_mem;
 	int written_to_disk;
+	int count;
     } *n1, *np, *np_current;
     
     LIST_INIT(&head);                       /* Initialize the list. */
     
     pthread_mutex_init(&queue_lock, NULL);	
     
-    do_options(argc, argv, myopts);
+    do_options(argc, argv, &myopts);
     
     for (n = 0; n < 10; n++) {
 	n1 = malloc(sizeof(struct entry));
@@ -374,8 +384,8 @@ int main(int argc, char **argv)
 	n1->written_to_disk = 0;
 	n1->written_to_mem = 0;
 	
-	for(ch = 0; ch < nchan; ch++) {
-	    n1->buffer_ch[ch] = malloc(out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS16));
+	for(ch = 0; ch < myopts.nchan; ch++) {
+	    n1->buffer_ch[ch] = malloc(myopts.out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS16));
 	    if (n1->buffer_ch[ch] == NULL) {
 		fprintf(stderr, "Failed to malloc data for buffer_ch[%d]!!\n", ch);
 		exit(10);
@@ -404,27 +414,28 @@ int main(int argc, char **argv)
     int tmp_stdout = suppress_stdout_start();
     // TODO: allow choosing input format, see https://www.reddit.com/r/RTLSDR/comments/4tpxv7/rx_tools_commandline_sdr_tools_for_rtlsdr_bladerf/d5ohfse?context=3
     
-    if (nchan > 0) {
-	channels = calloc(nchan, sizeof(size_t));
+    size_t * channels;
+    if (myopts.nchan > 0) {
+	channels = calloc(myopts.nchan, sizeof(size_t));
 	if (channels == NULL) {
 	    fprintf(stderr, "Failed to malloc data for channels!!\n");
 	    exit(10);
 	}
-	for(ch = 0; ch < nchan; ch++) {
+	for(ch = 0; ch < myopts.nchan; ch++) {
 	    channels[ch] = ch;
 	}
     } else {
 	channels = NULL;
     }
     
-    r = verbose_device_search(dev_query, &dev, &stream, SOAPY_SDR_CS16, channels, nchan);
+    r = verbose_device_search(myopts.dev_query, &dev, &stream, SOAPY_SDR_CS16, channels, myopts.nchan);
     
     if (r != 0) {
-	fprintf(stderr, "Failed to open SDR device matching %s.\n", dev_query);
+	fprintf(stderr, "Failed to open SDR device matching %s.\n", myopts.dev_query);
 	exit(1);
     }
     
-    fprintf(stderr, "Using output format: %s (input format %s)\n", output_format, SOAPY_SDR_CS16);
+    fprintf(stderr, "Using output format: %s (input format %s)\n", myopts.output_format, SOAPY_SDR_CS16);
     
     printf("****Number of channels: %d\n", SoapySDRDevice_getNumChannels(dev, SOAPY_SDR_RX));
     
@@ -440,13 +451,13 @@ int main(int argc, char **argv)
     SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
 #endif
     
-    if (direct_sampling) {
-	verbose_direct_sampling(dev, direct_sampling);
+    if (myopts.direct_sampling) {
+	verbose_direct_sampling(dev, myopts.direct_sampling);
     }
     
-    for(ch = 0; ch < nchan; ch++) {
-	if (bw[ch] < 0) {
-	    bw[ch] = 0.9 * samp_rate[ch];
+    for(ch = 0; ch < myopts.nchan; ch++) {
+	if (myopts.bw[ch] < 0) {
+	    myopts.bw[ch] = 0.9 * myopts.samp_rate[ch];
 	}
     }
     
@@ -455,60 +466,60 @@ int main(int argc, char **argv)
     /* Set the antenna */
     /* Set the bandwidth */
     if (channels == NULL) {
-	verbose_set_sample_rate(dev, samp_rate[0], 0);
-	verbose_set_frequency(dev, frequency[0], 0);
-	verbose_set_antenna(dev, ant[0], 0);
-	verbose_set_bandwidth(dev, bw[0], 0);
-	if (NULL == gain_str[0]) {
+	verbose_set_sample_rate(dev, myopts.samp_rate[0], 0);
+	verbose_set_frequency(dev, myopts.frequency[0], 0);
+	verbose_set_antenna(dev, myopts.ant[0], 0);
+	verbose_set_bandwidth(dev, myopts.bw[0], 0);
+	if (NULL == myopts.gain_str[0]) {
 	    /* Enable automatic gain */
 	    verbose_auto_gain(dev, 0);
 	} else {
 	    /* Enable manual gain */
-	    verbose_gain_str_set(dev, gain_str[0], 0);
+	    verbose_gain_str_set(dev, myopts.gain_str[0], 0);
 	}
-	verbose_ppm_set(dev, ppm_error, 0);
+	verbose_ppm_set(dev, myopts.ppm_error, 0);
     } else {
-	for(ch = 0; ch < nchan; ch++) {
+	for(ch = 0; ch < myopts.nchan; ch++) {
 	    char tname[256];
 	    snprintf(tname, 256, "saved_config_ch%01d.dat", ch);
-	    verbose_set_sample_rate(dev, samp_rate[ch], channels[ch]);
-	    verbose_set_frequency(dev, frequency[ch], channels[ch]);
-	    verbose_set_antenna(dev, ant[ch], channels[ch]);
-	    verbose_set_bandwidth(dev, bw[ch], channels[ch]);
+	    verbose_set_sample_rate(dev, myopts.samp_rate[ch], channels[ch]);
+	    verbose_set_frequency(dev, myopts.frequency[ch], channels[ch]);
+	    verbose_set_antenna(dev, myopts.ant[ch], channels[ch]);
+	    verbose_set_bandwidth(dev, myopts.bw[ch], channels[ch]);
 	    printf("Saving config into %s\n", tname);
 	    SoapySDRDevice_writeSetting(dev, "SAVE_CONFIG", tname);
 	    printf("Saved config into %s\n", tname);
-	    if (NULL == gain_str[ch]) {
+	    if (NULL == myopts.gain_str[ch]) {
 		/* Enable automatic gain */
 		verbose_auto_gain(dev, channels[ch]);
 	    } else {
 		/* Enable manual gain */
-		verbose_gain_str_set(dev, gain_str[ch], channels[ch]);
+		verbose_gain_str_set(dev, myopts.gain_str[ch], channels[ch]);
 	    }
-	    verbose_ppm_set(dev, ppm_error, channels[ch]);
+	    verbose_ppm_set(dev, myopts.ppm_error, channels[ch]);
 	    
 	}
     }
 	
 	
-    for(ch = 0; ch < nchan; ch++) {
-	if(strcmp(filename[ch], "-") == 0) { /* Write samples to stdout */
-	    file_ch[ch] = stdout;
+    for(ch = 0; ch < myopts.nchan; ch++) {
+	if(strcmp(myopts.filename[ch], "-") == 0) { /* Write samples to stdout */
+	    myopts.file_ch[ch] = stdout;
 #ifdef _WIN32
 	    _setmode(_fileno(stdin), _O_BINARY);
 #endif
 	} else {
-	    file_ch[ch] = fopen(filename[ch], "wb");
-	    if (!file_ch[ch]) {
-		fprintf(stderr, "Failed to open %s\n", filename[ch]);
+	    myopts.file_ch[ch] = fopen(myopts.filename[ch], "wb");
+	    if (!myopts.file_ch[ch]) {
+		fprintf(stderr, "Failed to open %s\n", myopts.filename[ch]);
 		goto out;
 	    }
 	}
     }
     /* Reset endpoint before we start reading from it (mandatory) */
     verbose_reset_buffer(dev);
-    count = 0;
-    if (true || sync_mode) {
+    int count = 0;
+    if (true || myopts.sync_mode) {
 	fprintf(stderr, "Reading samples in sync mode...\n");
 	SoapySDRKwargs args = {0};
 	if (SoapySDRDevice_activateStream(dev, stream, 0, 0, 0) != 0) {
@@ -531,11 +542,11 @@ int main(int argc, char **argv)
 	    }
 	    pthread_mutex_unlock(&queue_lock);
 	    
-	    for (ch = 0; ch < nchan; ch++) {
+	    for (ch = 0; ch < myopts.nchan; ch++) {
 		buffer_ch_rec[ch] = np_current->buffer_ch[ch];
 	    }
 	    
-	    r = SoapySDRDevice_readStream(dev, stream, (void *) buffer_ch_rec, out_block_size,
+	    r = SoapySDRDevice_readStream(dev, stream, (void *) buffer_ch_rec, myopts.out_block_size,
 					  &flags, &timeNs, timeoutNs);
 	    
 	    //fprintf(stderr, "readStream ret=%d, flags=%d, timeNs=%lld\n", r, flags, timeNs);
@@ -623,9 +634,9 @@ int main(int argc, char **argv)
 	fprintf(stderr, "\nLibrary error %d, exiting...\n", r);
     }
     
-    for(ch = 0; ch < nchan; ch++) {
-	if (file_ch[ch] != stdout) {
-	    fclose(file_ch[ch]);
+    for(ch = 0; ch < myopts.nchan; ch++) {
+	if (myopts.file_ch[ch] != stdout) {
+	    fclose(myopts.file_ch[ch]);
 	}
     }
     
@@ -633,7 +644,7 @@ int main(int argc, char **argv)
     SoapySDRDevice_closeStream(dev, stream);
     SoapySDRDevice_unmake(dev);
     
-    for(ch = 0; ch < nchan; ch++) {
+    for(ch = 0; ch < myopts.nchan; ch++) {
 	free(buffer_ch[ch]);
     }
     

@@ -45,7 +45,7 @@ find_library(
     RT_LIBRARY NAMES rt
     PATHS /usr/lib /usr/lib64
 )
-if (RT_LIBRARIES)
+if (RT_LIBRARY)
     list(APPEND RX_TOOLS_LIBS ${RT_LIBRARY})
 endif ()
 message(STATUS "RT lib: ${RT_LIBRARY}")

@@ -305,27 +305,34 @@ do_options(int argc, char **argv, ProgOptions * opts)
     }
 }
 
-void
+void *
 check_running(void * arg)
 {
   ProgOptions * myopts = (ProgOptions *) arg;
   
   int n;
   int ch;
-
+  int ret;
+  
   while (1) {
     for(n = 0; n < MAX_WRITE_QLEN; n++) {
       for(ch = 0; ch < myopts->nchan; ch++) {
 	if (running[n][ch] == 1) {
-	  if (aio_error (&aiocb[n][ch]) != EINPROGRESS) {
+	  ret = aio_error(&aiocb[n][ch]);
+	  if (ret != EINPROGRESS) {
 	    pthread_mutex_lock(&running_lock);
 	    running[n][ch] = 0;
 	    pthread_mutex_lock(&running_lock);
+	    if (ret > 0) {
+	      fprintf(stderr, "write failed with %d   %d:%d\n", ret, n, ch);
+	    }
 	  }
 	}
       }
     }
   }
+
+  return NULL;
 }
 
 int main(int argc, char **argv)
@@ -482,6 +489,10 @@ int main(int argc, char **argv)
 	aiocb[n][ch].aio_buf = buffer_ch[n][ch];
       }
     }
+
+    pthread_t pid;
+    
+    pthread_create(&pid, NULL, check_running, &myopts);
     
     /* Reset endpoint before we start reading from it (mandatory) */
     verbose_reset_buffer(dev);
@@ -602,6 +613,20 @@ int main(int argc, char **argv)
 	fprintf(stderr, "\nUser cancel, exiting...\n");
     } else {
 	fprintf(stderr, "\nLibrary error %d, exiting...\n", r);
+    }
+    pthread_cancel(pid);
+
+    int ret;
+    for(n = 0; n < MAX_WRITE_QLEN; n++) {
+      for(ch = 0; ch < myopts.nchan; ch++) {
+	if (running[n][ch] == 1) {
+	  while (aio_error(&aiocb[n][ch]) == EINPROGRESS);
+	  ret = aio_error(&aiocb[n][ch]);
+	  if (ret > 0) {
+	    fprintf(stderr, "Issue %d with %d:%d\n", ret, n, ch);
+	  }
+	}
+      }
     }
     
     for(ch = 0; ch < myopts.nchan; ch++) {

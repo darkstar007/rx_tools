@@ -40,6 +40,16 @@ list(APPEND RX_TOOLS_LIBS ${CMAKE_THREAD_LIBS_INIT})
 message(STATUS "THREADS_PTHREADS_INCLUDE_DIR: ${THREADS_PTHREADS_INCLUDE_DIR}")
 message(STATUS "CMAKE_THREAD_LIBS_INIT: ${CMAKE_THREAD_LIBS_INIT}")
 
+#link with -lrt for async IO
+find_library(
+    RT_LIBRARY NAMES rt
+    PATHS /usr/lib /usr/lib64
+)
+if (RT_LIBRARIES)
+    list(APPEND RX_TOOLS_LIBS ${RT_LIBRARY})
+endif ()
+message(STATUS "RT lib: ${RT_LIBRARY}")
+
 #windows getopt compatibility
 if (WIN32)
     include_directories(${PROJECT_SOURCE_DIR}/src/getopt)

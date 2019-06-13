@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <pthread.h>
+#include <aio.h>
+#include <fcntl.h>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -66,13 +68,13 @@ typedef struct {
 	int ppm_error;
 	int sync_mode;
 	int direct_sampling;
-	FILE *file_ch[MAX_NUM_CHANNELS];
-	int16_t *buffer_ch[MAX_NUM_CHANNELS];
-	int16_t *buffer_ch_rec[MAX_NUM_CHANNELS];
+	int file_fd[MAX_NUM_CHANNELS];
 	double bw[MAX_NUM_CHANNELS];
 } ProgOptions;
 
-pthread_mutex_t queue_lock;
+struct aiocb aiocb[MAX_WRITE_QLEN][MAX_NUM_CHANNELS];
+int running[MAX_WRITE_QLEN][MAX_NUM_CHANNELS];
+pthread_mutex_t running_lock;
 
 void usage(void)
 {
@@ -118,43 +120,6 @@ static void sighandler(int signum)
 	do_exit = 1;
 }
 #endif
-
-void write_thread(void * params)
-{
-    uint8_t *buf8 = NULL;
-    float *fbuf = NULL; // assumed 32-bit
-    int ch;
-
-#ifdef POOO    
-    for(ch = 0; ch < nchan; ch++) {
-	if (output_format == SOAPY_SDR_CS16) {
-	    // The "native" format we read in, write out no conversion needed
-	    // (Always reading in CS16 to support >8-bit devices)
-	    if (fwrite(buffer_ch[ch], sizeof(int16_t), n_read, file_ch[ch]) != (size_t)n_read) {
-		fprintf(stderr, "Short write, samples lost, exiting!\n");
-		do_exit = 1;
-	    }
-	    
-	}
-    }
-#endif
-    
-#ifdef POO
-    if (output_format == SOAPY_SDR_CS8 || output_format == SOAPY_SDR_CU8) {
-	buf8 = malloc(out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS8));
-	if (buf8 == NULL) {
-	    fprintf(stderr, "Failed to malloc data for buf8!!\n");
-	    exit(10);
-	}
-    } else if (output_format == SOAPY_SDR_CF32) {
-	fbuf = malloc(out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CF32));
-	if (fbuf == NULL) {
-	    fprintf(stderr, "Failed to malloc data for fbuf!!\n");
-	    exit(10);
-	}
-    }
-#endif
-}
 
 int
 do_options(int argc, char **argv, ProgOptions * opts)
@@ -209,8 +174,7 @@ do_options(int argc, char **argv, ProgOptions * opts)
     for (ch = 0; ch < MAX_NUM_CHANNELS; ch++) {
 	opts->filename[ch] = NULL;
 	opts->gain_str[ch] = NULL;
-	opts->file_ch[ch] = NULL;
-	opts->buffer_ch[ch] = NULL;
+	opts->file_fd[ch] = -1;
 	opts->bw[ch] = -1;
 	opts->frequency[ch] = 40000000;
 	opts->samp_rate[ch] = DEFAULT_SAMPLE_RATE;
@@ -341,6 +305,29 @@ do_options(int argc, char **argv, ProgOptions * opts)
     }
 }
 
+void
+check_running(void * arg)
+{
+  ProgOptions * myopts = (ProgOptions *) arg;
+  
+  int n;
+  int ch;
+
+  while (1) {
+    for(n = 0; n < MAX_WRITE_QLEN; n++) {
+      for(ch = 0; ch < myopts->nchan; ch++) {
+	if (running[n][ch] == 1) {
+	  if (aio_error (&aiocb[n][ch]) != EINPROGRESS) {
+	    pthread_mutex_lock(&running_lock);
+	    running[n][ch] = 0;
+	    pthread_mutex_lock(&running_lock);
+	  }
+	}
+      }
+    }
+  }
+}
+
 int main(int argc, char **argv)
 {
 #ifndef _WIN32
@@ -356,45 +343,21 @@ int main(int argc, char **argv)
     size_t ch;
     int n;
     ProgOptions myopts;
-    
-    LIST_HEAD(listhead, entry) head = LIST_HEAD_INITIALIZER(head);
-    
-    struct listhead *headp;                 /* List head. */
-    
-    struct entry {
-	LIST_ENTRY(entry) entries;      /* List. */
-	int16_t * buffer_ch[MAX_NUM_CHANNELS];
-	int written_to_mem;
-	int written_to_disk;
-	int count;
-    } *n1, *np, *np_current;
-    
-    LIST_INIT(&head);                       /* Initialize the list. */
-    
-    pthread_mutex_init(&queue_lock, NULL);	
-    
+    int16_t *buffer_ch[MAX_WRITE_QLEN][MAX_NUM_CHANNELS];
+
     do_options(argc, argv, &myopts);
-    
-    for (n = 0; n < 10; n++) {
-	n1 = malloc(sizeof(struct entry));
-	if (n1 == NULL) {
-	    fprintf(stderr, "Failed to malloc data for buffer_ch[%d]!!\n", ch);
-	    exit(10);
+    pthread_mutex_init(&running_lock, NULL);
+
+    for(n = 0; n < MAX_WRITE_QLEN; n++) {
+      for(ch = 0; ch < myopts.nchan; ch++) {
+	buffer_ch[n][ch] = malloc(myopts.out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS16));
+	if (buffer_ch[n][ch] == NULL) {
+	  fprintf(stderr, "Failed to malloc data for buffer_ch[%d]!!\n", ch);
+	  exit(10);
 	}
-	n1->written_to_disk = 0;
-	n1->written_to_mem = 0;
-	
-	for(ch = 0; ch < myopts.nchan; ch++) {
-	    n1->buffer_ch[ch] = malloc(myopts.out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS16));
-	    if (n1->buffer_ch[ch] == NULL) {
-		fprintf(stderr, "Failed to malloc data for buffer_ch[%d]!!\n", ch);
-		exit(10);
-	    }
-	}
-	
-	LIST_INSERT_HEAD(&head, n1, entries);
+	running[n][ch] = 0;
+      }
     }
-    
 #ifdef OLD
     if (output_format == SOAPY_SDR_CS8 || output_format == SOAPY_SDR_CU8) {
 	buf8 = malloc(out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS8));
@@ -503,22 +466,27 @@ int main(int argc, char **argv)
 	
 	
     for(ch = 0; ch < myopts.nchan; ch++) {
-	if(strcmp(myopts.filename[ch], "-") == 0) { /* Write samples to stdout */
-	    myopts.file_ch[ch] = stdout;
-#ifdef _WIN32
-	    _setmode(_fileno(stdin), _O_BINARY);
-#endif
-	} else {
-	    myopts.file_ch[ch] = fopen(myopts.filename[ch], "wb");
-	    if (!myopts.file_ch[ch]) {
-		fprintf(stderr, "Failed to open %s\n", myopts.filename[ch]);
-		goto out;
-	    }
-	}
+      myopts.file_fd[ch] = open(myopts.filename[ch], O_CREAT | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR);
+      if (myopts.file_fd[ch] == -1) {
+	fprintf(stderr, "Failed to open file: %s\n", myopts.filename[ch]);
+	perror("    ");
+	goto out;
+      }
     }
+
+    // Initialise the async write control structs
+    for(n = 0; n < MAX_WRITE_QLEN; n++) {
+      for(ch = 0; ch < myopts.nchan; ch++) {
+	memset(&aiocb[n][ch], 0, sizeof(struct aiocb));
+	aiocb[n][ch].aio_fildes = myopts.file_fd[ch];
+	aiocb[n][ch].aio_buf = buffer_ch[n][ch];
+      }
+    }
+    
     /* Reset endpoint before we start reading from it (mandatory) */
     verbose_reset_buffer(dev);
     int count = 0;
+    size_t curr_offset = 0;
     if (true || myopts.sync_mode) {
 	fprintf(stderr, "Reading samples in sync mode...\n");
 	SoapySDRKwargs args = {0};
@@ -532,23 +500,9 @@ int main(int argc, char **argv)
 	    long long timeNs = 0;
 	    long timeoutNs = 1000000;
 	    int64_t n_read = 0, r, i;
-	    np_current = NULL;
 	    
-	    pthread_mutex_lock(&queue_lock);
-	    LIST_FOREACH(np, &head, entries) {
-		if (np->written_to_disk == 0 && np_current == NULL) {
-		    np_current = np;
-		}
-	    }
-	    pthread_mutex_unlock(&queue_lock);
-	    
-	    for (ch = 0; ch < myopts.nchan; ch++) {
-		buffer_ch_rec[ch] = np_current->buffer_ch[ch];
-	    }
-	    
-	    r = SoapySDRDevice_readStream(dev, stream, (void *) buffer_ch_rec, myopts.out_block_size,
+	    r = SoapySDRDevice_readStream(dev, stream, (void *) buffer_ch[count], myopts.out_block_size,
 					  &flags, &timeNs, timeoutNs);
-	    
 	    //fprintf(stderr, "readStream ret=%d, flags=%d, timeNs=%lld\n", r, flags, timeNs);
 	    if (r >= 0) {
 		// r is number of elements read, elements=complex pairs of 8-bits, so buffer length in bytes is twice
@@ -567,24 +521,34 @@ int main(int argc, char **argv)
 		do_exit = 1;
 	    }
 	    
-	    pthread_mutex_lock(&queue_lock);
-	    np_current->written_to_mem = 1;
-	    np_current->count = count;
-	    np_current = NULL;
-	    pthread_mutex_unlock(&queue_lock);
-	    
-	    count++;
-#ifdef OLD
 	    // TODO: read these formats natively from SoapySDR (setupStream) instead of converting ourselves?
-	    for(ch = 0; ch < nchan; ch++) {
-		if (output_format == SOAPY_SDR_CS16) {
-		    // The "native" format we read in, write out no conversion needed
-		    // (Always reading in CS16 to support >8-bit devices)
-		    if (fwrite(buffer_ch[ch], sizeof(int16_t), n_read, file_ch[ch]) != (size_t)n_read) {
-			fprintf(stderr, "Short write, samples lost, exiting!\n");
-			do_exit = 1;
-		    }
-		    
+	    for(ch = 0; ch < myopts.nchan; ch++) {
+		if (myopts.output_format == SOAPY_SDR_CS16) {
+		  // The "native" format we read in, write out no conversion needed
+		  // (Always reading in CS16 to support >8-bit devices)
+		  if (running[count][ch] == 1) {
+		    fprintf(stderr, "Run out of buffers!!!\n");
+		    exit(6);
+		  }
+		  aiocb[count][ch].aio_nbytes = n_read * sizeof(int16_t);
+		  aiocb[count][ch].aio_offset = curr_offset;
+		  if (aio_write(&aiocb[count][ch]) == -1) {
+		    printf("Error at aio_write(): %s  %s:%d\n", strerror(errno), __FILE__, __LINE__);
+		    close(myopts.file_fd[ch]);
+		    exit(2);
+		  }
+		  
+		  pthread_mutex_lock(&running_lock);
+		  running[count][ch] = 1;
+		  pthread_mutex_lock(&running_lock);
+
+#ifdef OLD
+		  if (fwrite(buffer_ch[ch], sizeof(int16_t), n_read, file_ch[ch]) != (size_t)n_read) {
+		    fprintf(stderr, "Short write, samples lost, exiting!\n");
+		    do_exit = 1;
+		  }
+#endif
+#ifdef OLD		  
 		} else if (output_format == SOAPY_SDR_CS8) {
 		    for (i = 0; i < n_read; ++i) {
 			buf8[i] = ( (int16_t)buffer_ch[ch][i] / 32767.0 * 128.0 + 0.4);
@@ -609,9 +573,9 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Short write, samples lost, exiting!\n");
 			do_exit = 1;
 		    }
+#endif
 		}
 	    }
-#endif
 	    
 	    
 	    // TODO: hmm.. n_read 8192, but out_block_size (16 * 16384) is much larger TODO: loop? or accept 8192? rtl_fm ok with it
@@ -625,6 +589,12 @@ int main(int argc, char **argv)
 	    if (samples_to_read > 0) {
 		samples_to_read -= n_read;
 	    }
+
+	    count++;
+	    if (count == MAX_WRITE_QLEN) {
+	      count = 0;
+	    }
+	    curr_offset += n_read * sizeof(int16_t);
 	}
     }
     
@@ -635,17 +605,17 @@ int main(int argc, char **argv)
     }
     
     for(ch = 0; ch < myopts.nchan; ch++) {
-	if (myopts.file_ch[ch] != stdout) {
-	    fclose(myopts.file_ch[ch]);
-	}
+      close(myopts.file_fd[ch]);
     }
     
     SoapySDRDevice_deactivateStream(dev, stream, 0, 0);
     SoapySDRDevice_closeStream(dev, stream);
     SoapySDRDevice_unmake(dev);
-    
-    for(ch = 0; ch < myopts.nchan; ch++) {
-	free(buffer_ch[ch]);
+
+    for(n = 0; n < MAX_WRITE_QLEN; n++) {
+      for(ch = 0; ch < myopts.nchan; ch++) {
+	free(buffer_ch[n][ch]);
+      }
     }
     
 #ifdef OLD

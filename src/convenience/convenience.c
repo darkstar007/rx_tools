@@ -404,13 +404,15 @@ static void show_device_info(SoapySDRDevice *dev)
 	}
 	fprintf(stderr, "\n");
 
-
+	SoapySDRRange dev_gain_range = SoapySDRDevice_getGainRange(dev, direction, channel);
+	
 	gains = SoapySDRDevice_listGains(dev, direction, channel, &len);
 	fprintf(stderr, "Found %zu gain(s): ", len);
 	for (i = 0; i < len; ++i) {
-		fprintf(stderr, "%s ", gains[i]);
+	        SoapySDRRange gain_range = SoapySDRDevice_getGainElementRange(dev, direction, channel, gains[i]);
+		fprintf(stderr, "%s [%.1f to %.1f]   ", gains[i], gain_range.minimum, gain_range.maximum);
 	}
-	fprintf(stderr, "\n");
+	fprintf(stderr, "    Device range: [%.1f to %.1f]\n", dev_gain_range.minimum, dev_gain_range.maximum);
 
 	frequencies = SoapySDRDevice_listFrequencies(dev, direction, channel, &len);
 	fprintf(stderr, "Found %zu frequencies: ", len);

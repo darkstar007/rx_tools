@@ -320,12 +320,17 @@ check_running(void * arg)
 	if (running[n][ch] == 1) {
 	  ret = aio_error(&aiocb[n][ch]);
 	  if (ret != EINPROGRESS) {
+	    if (ret > 0) {
+	      fprintf(stderr, "write failed with %d   %d:%d\n", ret, n, ch);
+	    } else {
+		ret = aio_return(&aiocb[n][ch]);
+		if (ret != aiocb[n][ch].aio_nbytes) {
+		    fprintf(stderr, "Short write as %d != %d  %d:%d\n", ret, aiocb[n][ch].aio_nbytes, n, ch);
+		}
+	    }
 	    pthread_mutex_lock(&running_lock);
 	    running[n][ch] = 0;
 	    pthread_mutex_lock(&running_lock);
-	    if (ret > 0) {
-	      fprintf(stderr, "write failed with %d   %d:%d\n", ret, n, ch);
-	    }
 	  }
 	}
       }
@@ -484,9 +489,6 @@ int main(int argc, char **argv)
     // Initialise the async write control structs
     for(n = 0; n < MAX_WRITE_QLEN; n++) {
       for(ch = 0; ch < myopts.nchan; ch++) {
-	memset(&aiocb[n][ch], 0, sizeof(struct aiocb));
-	aiocb[n][ch].aio_fildes = myopts.file_fd[ch];
-	aiocb[n][ch].aio_buf = buffer_ch[n][ch];
       }
     }
 
@@ -541,6 +543,10 @@ int main(int argc, char **argv)
 		    fprintf(stderr, "Run out of buffers!!!\n");
 		    exit(6);
 		  }
+		  // In the man page (man aio) the memset is the recommended way to do before reuse
+		  memset(&aiocb[count][ch], 0, sizeof(struct aiocb));
+		  aiocb[count][ch].aio_fildes = myopts.file_fd[ch];
+		  aiocb[count][ch].aio_buf = buffer_ch[n][ch];
 		  aiocb[count][ch].aio_nbytes = n_read * sizeof(int16_t);
 		  aiocb[count][ch].aio_offset = curr_offset;
 		  if (aio_write(&aiocb[count][ch]) == -1) {

@@ -48,7 +48,7 @@
 #define MAXIMAL_BUF_LENGTH		(256 * 16384)
 #define MAX_NUM_CHANNELS                (8)
 
-#define MAX_WRITE_QLEN                  (10)  // The maximum number of writes we can have in a queue
+#define MAX_WRITE_QLEN                  (32)  // The maximum number of writes we can have in a queue
 
 static int do_exit = 0;
 static uint64_t samples_to_read = 0;
@@ -306,6 +306,35 @@ do_options(int argc, char **argv, ProgOptions * opts)
 }
 
 void *
+print_running(void * arg)
+{
+  ProgOptions * myopts = (ProgOptions *) arg;
+  
+  int n;
+  int ch;
+  int ret;
+  int count[MAX_NUM_CHANNELS];
+  
+  while (1) {
+    for(ch = 0; ch < myopts->nchan; ch++) {
+      count[ch] = 0;
+      for(n = 0; n < MAX_WRITE_QLEN; n++) {
+	if (running[n][ch] == 1) {
+	  count[ch]++;
+	}
+      }
+    }
+
+    printf("Buffers in use ");
+    for(ch = 0; ch < myopts->nchan; ch++) {
+      printf("%d ", count[ch]);
+    }
+    printf("\n");
+    sleep(2);
+  }
+}
+
+void *
 check_running(void * arg)
 {
   ProgOptions * myopts = (ProgOptions *) arg;
@@ -323,10 +352,12 @@ check_running(void * arg)
 	    if (ret > 0) {
 	      fprintf(stderr, "write failed with %d   %d:%d\n", ret, n, ch);
 	      perror("Write failed: ");
+	      do_exit = 1;
 	    } else {
 	      ret = aio_return(&aiocb[n][ch]);
 	      if (ret != aiocb[n][ch].aio_nbytes) {
 		fprintf(stderr, "Short write as %d != %d  %d:%d\n", ret, aiocb[n][ch].aio_nbytes, n, ch);
+		do_exit = 1;
 	      }
 	    }
 	    pthread_mutex_lock(&running_lock);
@@ -491,6 +522,7 @@ int main(int argc, char **argv)
     pthread_t pid;
     
     pthread_create(&pid, NULL, check_running, &myopts);
+    pthread_create(&pid, NULL, print_running, &myopts);
     
     /* Reset endpoint before we start reading from it (mandatory) */
     verbose_reset_buffer(dev);
@@ -537,6 +569,27 @@ int main(int argc, char **argv)
 		  // (Always reading in CS16 to support >8-bit devices)
 		  if (running[count][ch] == 1) {
 		    fprintf(stderr, "Run out of buffers!!!\n");
+		    {
+		      int xn;
+		      int xch;
+		      int xcount[MAX_NUM_CHANNELS];
+		      
+
+		      for(xch = 0; xch < myopts.nchan; xch++) {
+			xcount[xch] = 0;
+			for(xn = 0; xn < MAX_WRITE_QLEN; xn++) {
+			  if (running[xn][xch] == 1) {
+			    xcount[xch]++;
+			  }
+			}
+		      }
+		      
+		      printf("Buffers in use ");
+		      for(xch = 0; xch < myopts.nchan; xch++) {
+			printf("%d ", xcount[xch]);
+		      }
+		      printf("\n");
+		    }
 		    exit(6);
 		  }
 		  // In the man page (man aio) the memset is the recommended way to do before reuse

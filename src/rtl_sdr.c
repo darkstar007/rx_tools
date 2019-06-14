@@ -519,10 +519,11 @@ int main(int argc, char **argv)
       }
     }
 
-    pthread_t pid;
+    pthread_t pid_cr;
+    pthread_t pid_pr;
     
-    pthread_create(&pid, NULL, check_running, &myopts);
-    pthread_create(&pid, NULL, print_running, &myopts);
+    pthread_create(&pid_cr, NULL, check_running, &myopts);
+    pthread_create(&pid_pr, NULL, print_running, &myopts);
     
     /* Reset endpoint before we start reading from it (mandatory) */
     verbose_reset_buffer(dev);
@@ -670,7 +671,8 @@ int main(int argc, char **argv)
     } else {
 	fprintf(stderr, "\nLibrary error %d, exiting...\n", r);
     }
-    pthread_cancel(pid);
+    pthread_cancel(pid_cr);
+    pthread_cancel(pid_pr);
 
     int ret;
     for(n = 0; n < MAX_WRITE_QLEN; n++) {

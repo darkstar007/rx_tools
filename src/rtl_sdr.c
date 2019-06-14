@@ -322,15 +322,16 @@ check_running(void * arg)
 	  if (ret != EINPROGRESS) {
 	    if (ret > 0) {
 	      fprintf(stderr, "write failed with %d   %d:%d\n", ret, n, ch);
+	      perror("Write failed: ");
 	    } else {
-		ret = aio_return(&aiocb[n][ch]);
-		if (ret != aiocb[n][ch].aio_nbytes) {
-		    fprintf(stderr, "Short write as %d != %d  %d:%d\n", ret, aiocb[n][ch].aio_nbytes, n, ch);
-		}
+	      ret = aio_return(&aiocb[n][ch]);
+	      if (ret != aiocb[n][ch].aio_nbytes) {
+		fprintf(stderr, "Short write as %d != %d  %d:%d\n", ret, aiocb[n][ch].aio_nbytes, n, ch);
+	      }
 	    }
 	    pthread_mutex_lock(&running_lock);
 	    running[n][ch] = 0;
-	    pthread_mutex_lock(&running_lock);
+	    pthread_mutex_unlock(&running_lock);
 	  }
 	}
       }
@@ -370,6 +371,7 @@ int main(int argc, char **argv)
 	running[n][ch] = 0;
       }
     }
+    
 #ifdef OLD
     if (output_format == SOAPY_SDR_CS8 || output_format == SOAPY_SDR_CU8) {
 	buf8 = malloc(out_block_size * SoapySDR_formatToSize(SOAPY_SDR_CS8));
@@ -486,12 +488,6 @@ int main(int argc, char **argv)
       }
     }
 
-    // Initialise the async write control structs
-    for(n = 0; n < MAX_WRITE_QLEN; n++) {
-      for(ch = 0; ch < myopts.nchan; ch++) {
-      }
-    }
-
     pthread_t pid;
     
     pthread_create(&pid, NULL, check_running, &myopts);
@@ -546,18 +542,19 @@ int main(int argc, char **argv)
 		  // In the man page (man aio) the memset is the recommended way to do before reuse
 		  memset(&aiocb[count][ch], 0, sizeof(struct aiocb));
 		  aiocb[count][ch].aio_fildes = myopts.file_fd[ch];
-		  aiocb[count][ch].aio_buf = buffer_ch[n][ch];
+		  aiocb[count][ch].aio_buf = buffer_ch[count][ch];
 		  aiocb[count][ch].aio_nbytes = n_read * sizeof(int16_t);
 		  aiocb[count][ch].aio_offset = curr_offset;
+
 		  if (aio_write(&aiocb[count][ch]) == -1) {
 		    printf("Error at aio_write(): %s  %s:%d\n", strerror(errno), __FILE__, __LINE__);
 		    close(myopts.file_fd[ch]);
 		    exit(2);
 		  }
-		  
+
 		  pthread_mutex_lock(&running_lock);
 		  running[count][ch] = 1;
-		  pthread_mutex_lock(&running_lock);
+		  pthread_mutex_unlock(&running_lock);
 
 #ifdef OLD
 		  if (fwrite(buffer_ch[ch], sizeof(int16_t), n_read, file_ch[ch]) != (size_t)n_read) {

@@ -480,7 +480,7 @@ int main(int argc, char **argv)
 	
 	
     for(ch = 0; ch < myopts.nchan; ch++) {
-      myopts.file_fd[ch] = open(myopts.filename[ch], O_CREAT | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR);
+      myopts.file_fd[ch] = open(myopts.filename[ch], O_CREAT | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
       if (myopts.file_fd[ch] == -1) {
 	fprintf(stderr, "Failed to open file: %s\n", myopts.filename[ch]);
 	perror("    ");
